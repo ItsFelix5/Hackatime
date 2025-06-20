@@ -1,8 +1,10 @@
+extern crate core;
+
 use std::env::var_os;
-use std::ffi::{OsStr};
-use std::fmt::{format, Display};
+use std::ffi::OsStr;
+use std::fmt::Display;
 use std::fs;
-use std::io::stdin;
+use std::io::{stdin, stdout, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,14 +25,18 @@ fn main() {
     #[cfg(unix)]
     check_terminal();
     ok("Everything looks good!");
-}
+    
+    print!("Press enter to close");
+    stdout().flush().unwrap();
+    stdin().read(&mut [0u8]).unwrap();
+} 
 
 fn check_git() {
     if run(["git", "-v"]).is_some() {
         ok("Git is installed");
     } else {
         warn("Git is not installed, this is not required for Hackatime but need it to upload your code");
-        if !ask("Install git? (Y/n)").contains("n") {
+        if !ask("Install git? (Y/n) ").contains("n") {
             if cfg!(target_os = "windows") {
                 if run(["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]).is_some() {
                     ok("Successfully installed git using winget")
@@ -95,7 +101,7 @@ fn check_config() {
                 let parts: Vec<&str> = line.split('=').collect();
                 if parts.len() != 2 {
                     err(format!("Line {i} \"{line}\" in .wakatime.cfg is invalid"));
-                    if !ask("Replace full file? (Y/n)").contains("n") {
+                    if !ask("Replace full file? (Y/n) ").contains("n") {
                         create_config(&wakatime_config);
                         return;
                     } else {
@@ -170,7 +176,7 @@ heartbeat_rate_limit_seconds = 30").as_bytes()).expect("Could not write wakatime
 }
 
 fn ask_key() -> String {
-    let mut api_key = ask("What is your API key?");//TODO link
+    let mut api_key = ask("What is your API key? ");//TODO link
     validate_key(&mut api_key);
     api_key
 }
@@ -187,9 +193,8 @@ fn validate_key(api_key: &mut String) {
     if code == 401 {
         err(format!("Invalid API key {api_key}"));
         *api_key = ask_key();
-    }
-    if !code.is_success() {
-        panic!("Failed to send heartbeat!");
+    } else if !code.is_success() {
+        panic!("{} Failed to send heartbeat!", code.as_str());
     } else {
         ok("Successfully sent heartbeat");
     }
@@ -223,7 +228,7 @@ fn check_vscode() {
             }
         } else {
             warn("VS Code does not have the Wakatime extension installed");
-            if !ask("Install? (Y/n)").contains("n") {
+            if !ask("Install? (Y/n) ").contains("n") {
                 if run(["code", "--install-extension", "wakatime.vscode-wakatime", "--force"]).is_some() {
                     ok("Successfully installed Wakatime for VS Code");
                 } else {
@@ -252,7 +257,7 @@ fn check_jetbrains() {
             if let Ok(entry) = entry {
                 let file = entry.file_name().to_str().unwrap().to_string();
                 if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
-                    if !ask(format!("Do you want to install Wakatime for {}? (Y/n)", name)).contains("n") {
+                    if ask(format!("Do you want to install Wakatime for {}? (y/N) ", name)).contains("y") {
                         if Command::new(entry.path()).args(["installPlugins", "com.wakatime.intellij.plugin"]).output().is_ok() {
                             ok("Successfully installed Wakatime for ".to_owned() + name);
                         } else { 
@@ -269,7 +274,7 @@ fn check_jetbrains() {
 
 #[cfg(unix)]
 fn check_terminal() {
-    if !ask("Do you want to install Wakatime in the terminal? (Y/n)").contains("n") {
+    if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
         run(["curl", "-fsSL", "https://hack.club/terminal-wakatime.sh", "|", "sh"]);
     }
 }
@@ -291,8 +296,9 @@ fn ok<S: Display>(text: S) {
 }
 
 fn ask<S: Display>(text: S) -> String {
-    println!("❓  {text}");
-    let mut response =  String::new();
+    print!("❓  {text}");
+    stdout().flush().unwrap();
+    let mut response = String::new();
     stdin().read_line(&mut response).expect("Failed to read from stdin");
     response.trim().to_lowercase()
 }
