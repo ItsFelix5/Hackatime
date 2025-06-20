@@ -1,6 +1,6 @@
 use std::env::var_os;
 use std::ffi::{OsStr};
-use std::fmt::Display;
+use std::fmt::{format, Display};
 use std::fs;
 use std::io::stdin;
 use std::path::{Path, PathBuf};
@@ -16,15 +16,60 @@ fn main() {
     println!(r#" |  _  | (_| | (__|   < (_| | |_| | | | | | |  __/"#);
     println!(r#" |_| |_|\__,_|\___|_|\_\__,_|\__|_|_| |_| |_|\___|"#);
 
+    check_git();
+    check_config();
+    check_vscode();
+    check_jetbrains();
+    #[cfg(unix)]
+    check_terminal();
+    ok("Everything looks good!");
+}
+
+fn check_git() {
     if run(["git", "-v"]).is_some() {
         ok("Git is installed");
     } else {
-        warn("Git is not installed, this is not required for Hackatime but need it to upload your code, download it at https://git-scm.com/downloads")
+        warn("Git is not installed, this is not required for Hackatime but need it to upload your code");
+        if !ask("Install git? (Y/n)").contains("n") {
+            if cfg!(target_os = "windows") {
+                if run(["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]).is_some() {
+                    ok("Successfully installed git using winget")
+                } else {
+                    err("Failed to install git using winget. Download git manually at https://git-scm.com/downloads/win");
+                }
+            } else if cfg!(target_os = "macos") {
+                if run(["brew", "install", "git"]).is_some() {
+                    ok("Successfully installed git using homebrew")
+                } else {
+                    err("Failed to install git using homebrew. Download git manually at https://git-scm.com/downloads/mac");
+                }
+            } else {
+                let mut command = vec!["sudo"];
+                let distro = fs::read_to_string("/etc/os-release").unwrap_or_default();
+                if distro.contains("ubuntu") || distro.contains("debian") {
+                    run(["sudo", "apt-get", "update"]);
+                    command.append(&mut vec!["apt-get", "install", "-y", "git"]);
+                } else if distro.contains("fedora") || distro.contains("rhel") || distro.contains("centos") {
+                    command.append(&mut vec!["dnf", "install", "-y", "git"]);
+                } else if distro.contains("arch") {
+                    command.append(&mut vec!["pacman", "-Sy", "git", "--noconfirm"]);
+                } else if distro.contains("nix") {
+                    command.append(&mut vec!["nix-env", "-i", "git"]);
+                } else {
+                    err("Unsupported distro, please install Git manually at https://git-scm.com/downloads");
+                }
+                if command.len() > 1 {
+                    if run(command).is_some() {
+                        ok("Successfully installed git")
+                    } else {
+                        err("Failed to install git, please install Git manually at https://git-scm.com/downloads")
+                    }
+                }
+            }
+        } else {
+            info("Download git manually at https://git-scm.com/downloads");
+        }
     }
-
-    check_config();
-    check_vscode();
-    ok("Everything looks good!");
 }
 
 fn check_config() {
@@ -191,6 +236,44 @@ fn check_vscode() {
     }
 }
 
+fn check_jetbrains() {
+    let mut path;
+    if cfg!(target_os = "windows") {
+        path = PathBuf::from(variable("LOCALAPPDATA").expect("No local appdata found"));
+    } else if cfg!(target_os = "macos") {
+        path = PathBuf::from(variable("HOME").expect("No home directory found")).join("Library/Application Support");
+        if !Path::new(&path).exists() {path = PathBuf::from("/usr/local/bin");}
+    } else {
+        path = PathBuf::from(variable("HOME").expect("No home directory found")).join(".local/share");
+    }
+    path = path.join("JetBrains/Toolbox/scripts");
+    if let Ok(dir) = fs::read_dir(path) { 
+        for entry in dir {
+            if let Ok(entry) = entry {
+                let file = entry.file_name().to_str().unwrap().to_string();
+                if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
+                    if !ask(format!("Do you want to install Wakatime for {}? (Y/n)", name)).contains("n") {
+                        if Command::new(entry.path()).args(["installPlugins", "com.wakatime.intellij.plugin"]).output().is_ok() {
+                            ok("Successfully installed Wakatime for ".to_owned() + name);
+                        } else { 
+                            err("Failed to install Wakatime for".to_owned() + name);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        warn("Jetbrains Toolbox not found, skipping IDEs") 
+    }
+}
+
+#[cfg(unix)]
+fn check_terminal() {
+    if !ask("Do you want to install Wakatime in the terminal? (Y/n)").contains("n") {
+        run(["curl", "-fsSL", "https://hack.club/terminal-wakatime.sh", "|", "sh"]);
+    }
+}
+
 fn err<S: Display>(text: S) {
     eprintln!("\x1B[38;5;196m❌  {text}\x1B[0m");
 }
@@ -211,7 +294,7 @@ fn ask<S: Display>(text: S) -> String {
     println!("❓  {text}");
     let mut response =  String::new();
     stdin().read_line(&mut response).expect("Failed to read from stdin");
-    response.trim().to_string()
+    response.trim().to_lowercase()
 }
 
 fn variable(key: &str) -> Option<String> {
@@ -222,7 +305,7 @@ fn variable(key: &str) -> Option<String> {
     Some(val)
 }
 
-fn run<I: IntoIterator<Item = S>, S: AsRef<OsStr>,>(args: I) -> Option<String> {
+fn run<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> Option<String> {
     let mut command;
     if cfg!(target_os = "windows") {
         command = Command::new("cmd");
