@@ -1,50 +1,53 @@
-name: Release
+name: Build
 
 on: workflow_dispatch
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-pc-windows-gnu
-          - x86_64-apple-darwin
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Package binary
-        run: |
-          BIN_NAME=$(basename $(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].targets[] | select(.kind[]=="bin") | .name'))
-          EXT=""
-          [[ "${{ matrix.target }}" == *"windows"* ]] && EXT=".exe"
-          mkdir dist
-          cp target/${{ matrix.target }}/release/$BIN_NAME$EXT dist/${BIN_NAME}-${{ matrix.target }}$EXT
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - run: rustup target add x86_64-unknown-linux-gnu
+      - run: cargo build --release --target x86_64-unknown-linux-gnu
+      - run: mkdir dist && cp target/x86_64-unknown-linux-gnu/release/Hackatime.exe dist/<your-binary>-linux
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: linux
+          path: dist/*
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-pc-windows-gnu
+      - run: sudo apt update && sudo apt install -y mingw-w64
+      - run: cargo build --release --target x86_64-pc-windows-gnu
+      - run: mkdir dist && cp target/x86_64-pc-windows-gnu/release/<your-binary>.exe dist/<your-binary>-windows.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-apple-darwin
+      - run: cargo build --release --target x86_64-apple-darwin
+      - run: mkdir dist && cp target/x86_64-apple-darwin/release/<your-binary> dist/<your-binary>-mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
           path: dist/*
 
   release:
-    needs: build
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
         env:
