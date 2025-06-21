@@ -6,7 +6,7 @@ use std::fmt::Display;
 use std::fs;
 use std::io::{stdin, stdout, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command};
+use std::process::{exit, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 use reqwest::blocking::Client;
 use reqwest::header::CONTENT_TYPE;
@@ -32,19 +32,19 @@ fn main() {
 } 
 
 fn check_git() {
-    if run(["git", "-v"]).is_some() {
+    if run("git -v").is_some() {
         ok("Git is installed");
     } else {
-        warn("Git is not installed, this is not required for Hackatime but need it to upload your code");
+        warn("Git is not installed, this is not required for Hackatime but it is needed to upload your code");
         if !ask("Install git? (Y/n) ").contains("n") {
             if cfg!(target_os = "windows") {
-                if run(["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]).is_some() {
+                if run_with_output(["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]) {
                     ok("Successfully installed git using winget")
                 } else {
                     err("Failed to install git using winget. Download git manually at https://git-scm.com/downloads/win");
                 }
             } else if cfg!(target_os = "macos") {
-                if run(["brew", "install", "git"]).is_some() {
+                if run_with_output(["brew", "install", "git"]) {
                     ok("Successfully installed git using homebrew")
                 } else {
                     err("Failed to install git using homebrew. Download git manually at https://git-scm.com/downloads/mac");
@@ -53,7 +53,7 @@ fn check_git() {
                 let mut command = vec!["sudo"];
                 let distro = fs::read_to_string("/etc/os-release").unwrap_or_default();
                 if distro.contains("ubuntu") || distro.contains("debian") {
-                    run(["sudo", "apt-get", "update"]);
+                    run("sudo apt-get update");
                     command.append(&mut vec!["apt-get", "install", "-y", "git"]);
                 } else if distro.contains("fedora") || distro.contains("rhel") || distro.contains("centos") {
                     command.append(&mut vec!["dnf", "install", "-y", "git"]);
@@ -65,7 +65,7 @@ fn check_git() {
                     err("Unsupported distro, please install Git manually at https://git-scm.com/downloads");
                 }
                 if command.len() > 1 {
-                    if run(command).is_some() {
+                    if run_with_output(command) {
                         ok("Successfully installed git")
                     } else {
                         err("Failed to install git, please install Git manually at https://git-scm.com/downloads")
@@ -201,8 +201,8 @@ fn validate_key(api_key: &mut String) {
 }
 
 fn check_vscode() {
-    if let Some(output) = run(["code", "--list-extensions"]) {
-        if output.contains("wakatime.vscode-wakatime") {
+    if let Some(output) = run("code --list-extensions") {
+        if String::from_utf8(output).expect("Stdout returned non-UTF data").contains("wakatime.vscode-wakatime") {
             ok("Wakatime is installed in VS Code");
             let path;
 
@@ -229,7 +229,7 @@ fn check_vscode() {
         } else {
             warn("VS Code does not have the Wakatime extension installed");
             if !ask("Install? (Y/n) ").contains("n") {
-                if run(["code", "--install-extension", "wakatime.vscode-wakatime", "--force"]).is_some() {
+                if run_with_output(["code", "--install-extension", "wakatime.vscode-wakatime", "--force"]) {
                     ok("Successfully installed Wakatime for VS Code");
                 } else {
                     err("Failed to install Wakatime for VS Code")
@@ -257,10 +257,10 @@ fn check_jetbrains() {
             if let Ok(entry) = entry {
                 let file = entry.file_name().to_str().unwrap().to_string();
                 if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
-                    if ask(format!("Do you want to install Wakatime for {}? (y/N) ", name)).contains("y") {
-                        if Command::new(entry.path()).args(["installPlugins", "com.wakatime.intellij.plugin"]).output().is_ok() {
+                    if !ask(format!("Do you want to install Wakatime for {}? (Y/n) ", name)).contains("n") {
+                        if run_with_output([entry.path().to_str().expect("Non UTF-8 path"), "installPlugins", "com.wakatime.intellij.plugin"]) {
                             ok("Successfully installed Wakatime for ".to_owned() + name);
-                        } else { 
+                        } else {
                             err("Failed to install Wakatime for".to_owned() + name);
                         }
                     }
@@ -275,7 +275,7 @@ fn check_jetbrains() {
 #[cfg(unix)]
 fn check_terminal() {
     if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
-        run(["curl", "-fsSL", "https://hack.club/terminal-wakatime.sh", "|", "sh"]);
+        run_with_output(["curl", "-fsSL", "https://hack.club/terminal-wakatime.sh", "|", "sh"]);
     }
 }
 
@@ -311,7 +311,7 @@ fn variable(key: &str) -> Option<String> {
     Some(val)
 }
 
-fn run<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> Option<String> {
+fn run(args: &str) -> Option<Vec<u8>> {
     let mut command;
     if cfg!(target_os = "windows") {
         command = Command::new("cmd");
@@ -320,10 +320,22 @@ fn run<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> Option<String> {
         command = Command::new(variable("SHELL").unwrap_or("/bin/sh".to_string()));
         command.args(&["-l", "-c"]);
     }
-    if let Ok(result) = command.args(args).output() {
+    if let Ok(result) = command.arg(args).output() {
         if result.status.success() {
-            return Some(String::from_utf8(result.stdout).expect("Stdout returned non-UTF data"));
+            return Some(result.stdout);
         }
     }
     None
+}
+
+fn run_with_output<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> bool {
+    let mut command;
+    if cfg!(target_os = "windows") {
+        command = Command::new("cmd");
+        command.arg("/C");
+    } else {
+        command = Command::new(variable("SHELL").unwrap_or("/bin/sh".to_string()));
+        command.args(&["-l", "-c"]);
+    }
+    command.args(args).stdout(Stdio::inherit()).stderr(Stdio::inherit()).stdin(Stdio::inherit()).status().is_ok_and(|o| o.success())
 }
