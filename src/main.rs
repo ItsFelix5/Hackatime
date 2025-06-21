@@ -258,7 +258,7 @@ fn check_jetbrains() {
                 let file = entry.file_name().to_str().unwrap().to_string();
                 if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
                     if !ask(format!("Do you want to install Wakatime for {}? (Y/n) ", name)).contains("n") {
-                        if run_with_output(&*(entry.path().to_string_lossy().to_string() + "installPlugins com.wakatime.intellij.plugin")) {
+                        if run_with_output(&*(entry.path().to_string_lossy().to_string() + " installPlugins com.wakatime.intellij.plugin")) {
                             ok("Successfully installed Wakatime for ".to_owned() + name);
                         } else {
                             err("Failed to install Wakatime for".to_owned() + name);
