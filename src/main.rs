@@ -38,34 +38,34 @@ fn check_git() {
         warn("Git is not installed, this is not required for Hackatime but it is needed to upload your code");
         if !ask("Install git? (Y/n) ").contains("n") {
             if cfg!(target_os = "windows") {
-                if run_with_output(["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]) {
+                if run_with_output("winget install --id Git.Git -e --source winget") {
                     ok("Successfully installed git using winget")
                 } else {
                     err("Failed to install git using winget. Download git manually at https://git-scm.com/downloads/win");
                 }
             } else if cfg!(target_os = "macos") {
-                if run_with_output(["brew", "install", "git"]) {
+                if run_with_output("brew install git") {
                     ok("Successfully installed git using homebrew")
                 } else {
                     err("Failed to install git using homebrew. Download git manually at https://git-scm.com/downloads/mac");
                 }
             } else {
-                let mut command = vec!["sudo"];
+                let mut command = "";
                 let distro = fs::read_to_string("/etc/os-release").unwrap_or_default();
                 if distro.contains("ubuntu") || distro.contains("debian") {
                     run("sudo apt-get update");
-                    command.append(&mut vec!["apt-get", "install", "-y", "git"]);
+                    command = "apt-get install -y git";
                 } else if distro.contains("fedora") || distro.contains("rhel") || distro.contains("centos") {
-                    command.append(&mut vec!["dnf", "install", "-y", "git"]);
+                    command = "dnf install -y git";
                 } else if distro.contains("arch") {
-                    command.append(&mut vec!["pacman", "-Sy", "git", "--noconfirm"]);
+                    command = "pacman -Sy git --noconfirm";
                 } else if distro.contains("nix") {
-                    command.append(&mut vec!["nix-env", "-i", "git"]);
+                    command = "nix-env -i git";
                 } else {
                     err("Unsupported distro, please install Git manually at https://git-scm.com/downloads");
                 }
-                if command.len() > 1 {
-                    if run_with_output(command) {
+                if !command.is_empty() {
+                    if run_with_output(&*("sudo".to_string() + command)) {
                         ok("Successfully installed git")
                     } else {
                         err("Failed to install git, please install Git manually at https://git-scm.com/downloads")
@@ -229,7 +229,7 @@ fn check_vscode() {
         } else {
             warn("VS Code does not have the Wakatime extension installed");
             if !ask("Install? (Y/n) ").contains("n") {
-                if run_with_output(["code", "--install-extension", "wakatime.vscode-wakatime", "--force"]) {
+                if run_with_output("code --install-extension wakatime.vscode-wakatime --force") {
                     ok("Successfully installed Wakatime for VS Code");
                 } else {
                     err("Failed to install Wakatime for VS Code")
@@ -258,7 +258,7 @@ fn check_jetbrains() {
                 let file = entry.file_name().to_str().unwrap().to_string();
                 if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
                     if !ask(format!("Do you want to install Wakatime for {}? (Y/n) ", name)).contains("n") {
-                        if run_with_output([entry.path().to_str().expect("Non UTF-8 path"), "installPlugins", "com.wakatime.intellij.plugin"]) {
+                        if run_with_output(&*(entry.path().to_string_lossy().to_string() + "installPlugins com.wakatime.intellij.plugin")) {
                             ok("Successfully installed Wakatime for ".to_owned() + name);
                         } else {
                             err("Failed to install Wakatime for".to_owned() + name);
@@ -268,7 +268,7 @@ fn check_jetbrains() {
             }
         }
     } else {
-        warn("Jetbrains Toolbox not found, skipping IDEs") 
+        info("Jetbrains Toolbox not found, skipping IDEs") 
     }
 }
 
@@ -328,7 +328,7 @@ fn run(args: &str) -> Option<Vec<u8>> {
     None
 }
 
-fn run_with_output<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> bool {
+fn run_with_output(args: &str) -> bool {
     let mut command;
     if cfg!(target_os = "windows") {
         command = Command::new("cmd");
@@ -337,5 +337,5 @@ fn run_with_output<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(args: I) -> bool 
         command = Command::new(variable("SHELL").unwrap_or("/bin/sh".to_string()));
         command.args(&["-l", "-c"]);
     }
-    command.args(args).stdout(Stdio::inherit()).stderr(Stdio::inherit()).stdin(Stdio::inherit()).status().is_ok_and(|o| o.success())
+    command.arg(args).stdout(Stdio::inherit()).stderr(Stdio::inherit()).stdin(Stdio::inherit()).status().is_ok_and(|o| o.success())
 }
