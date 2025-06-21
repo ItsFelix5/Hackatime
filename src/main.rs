@@ -275,7 +275,7 @@ fn check_jetbrains() {
 #[cfg(unix)]
 fn check_terminal() {
     if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
-        run_with_output(["curl", "-fsSL", "https://hack.club/terminal-wakatime.sh", "|", "sh"]);
+        run_with_output("curl -fsSL https://hack.club/terminal-wakatime.sh | sh");
     }
 }
 
