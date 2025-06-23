@@ -32,7 +32,7 @@ fn main() {
     print!("Press enter to close");
     stdout().flush().unwrap();
     stdin().read(&mut [0u8]).unwrap();
-} 
+}
 
 fn check_git() {
     if run("git -v").is_some() {
@@ -83,7 +83,7 @@ fn check_git() {
 
 fn check_config() {
     let wakatime_home = path_from_env("WAKATIME_HOME")
-        .or_else(|| path_from_env(if cfg!(windows){"USERPROFILE"}else{"HOME"}))
+        .or_else(|| path_from_env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }))
         .expect("No home or WAKATIME_HOME directory found");
 
     let wakatime_config = Path::new(&wakatime_home).join(".wakatime.cfg");
@@ -278,7 +278,7 @@ fn check_jetbrains() {
             }
         }
     } else {
-        info("Jetbrains Toolbox not found, skipping IDEs") 
+        info("Jetbrains Toolbox not found, skipping IDEs")
     }
 }
 
@@ -289,7 +289,6 @@ fn check_terminal() {
         check_terminal_registered(false);
     } else {
         if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
-
             let os = if cfg!(target_os = "windows") {"windows"} else if cfg!(target_os = "macos") {"darwin"} else {"linux"};
             let arch = if cfg!(any(target_arch = "arm", target_arch = "aarch64")) {"arm64"} else {"amd64"};
             if let Ok(data) = get(format!("github.com/hackclub/terminal-wakatime/releases/latest/download/terminal-wakatime-{os}-{arch}")).and_then(|r| r.bytes()) {
@@ -306,7 +305,7 @@ fn check_terminal() {
                 } else {
                     err("Failed write to ".to_string() + &*target.to_string_lossy());
                 }
-            } else { 
+            } else {
                 err("Failed to get the latest binary")
             }
         }
@@ -342,7 +341,11 @@ fn check_terminal_registered(add_path: bool) {
                     content += &*format!("eval {output}");
                 }
             }
-            ok("Registered wakatime-terminal for ".to_string() + name);
+            if fs::write(&path, content).is_ok() {
+                ok("Registered wakatime-terminal for ".to_string() + name);
+            } else {
+                err("Failed write to ".to_string() + file);
+            }
         }
     }
     info("Restart your terminal for time tracking to work")
