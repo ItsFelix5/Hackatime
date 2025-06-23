@@ -1,14 +1,15 @@
 extern crate core;
 
 use std::env::var_os;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::fs;
+use std::fs::File;
 use std::io::{stdin, stdout, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
-use reqwest::blocking::Client;
+use reqwest::blocking::{get, Client};
 use reqwest::header::CONTENT_TYPE;
 
 fn main() {
@@ -17,6 +18,7 @@ fn main() {
     println!(r#" | |_| |/ _` |/ __| |/ / _` | __| | '_ ` _ \ / _ \"#);
     println!(r#" |  _  | (_| | (__|   < (_| | |_| | | | | | |  __/"#);
     println!(r#" |_| |_|\__,_|\___|_|\_\__,_|\__|_|_| |_| |_|\___|"#);
+    info("Report issues to https://github.com/itsFelix5/hackatime/issues");
 
     check_git();
     check_config();
@@ -24,8 +26,9 @@ fn main() {
     check_jetbrains();
     #[cfg(unix)]
     check_terminal();
-    ok("Everything looks good!");
-    
+    ok("Everything looks good! Code for a few minutes and check if it appears on https://hackatime.hackclub.com");
+    info("The SOM website has a very long cache and should not be trusted for accurate time data");
+
     print!("Press enter to close");
     stdout().flush().unwrap();
     stdin().read(&mut [0u8]).unwrap();
@@ -79,14 +82,15 @@ fn check_git() {
 }
 
 fn check_config() {
-    let wakatime_home = variable("WAKATIME_HOME")
-        .or_else(|| variable(if cfg!(windows){"USERPROFILE"}else{"HOME"}))
+    let wakatime_home = path_from_env("WAKATIME_HOME")
+        .or_else(|| path_from_env(if cfg!(windows){"USERPROFILE"}else{"HOME"}))
         .expect("No home or WAKATIME_HOME directory found");
 
     let wakatime_config = Path::new(&wakatime_home).join(".wakatime.cfg");
 
+    let mut api_key = String::new();
     if wakatime_config.exists() {
-        ok("Found wakatime config file in ".to_string() + &*wakatime_home);
+        ok("Found wakatime config file in ".to_string() + &wakatime_home.to_string_lossy());
         let mut lines: Vec<String> = fs::read_to_string(&wakatime_config).expect("Could not read wakatime config file").lines().map(str::to_string).collect();
 
         let mut dirty = false;
@@ -102,7 +106,14 @@ fn check_config() {
                 if parts.len() != 2 {
                     err(format!("Line {i} \"{line}\" in .wakatime.cfg is invalid"));
                     if !ask("Replace full file? (Y/n) ").contains("n") {
-                        create_config(&wakatime_config);
+                        api_key = ask_key();
+
+                        fs::write(wakatime_config, ("[settings]
+api_url = https://hackatime.hackclub.com/api/hackatime/v1
+api_key = ".to_owned() +api_key.as_str()+"
+heartbeat_rate_limit_seconds = 30").as_bytes()).expect("Could not write wakatime config file");
+
+                        ok("Wakatime config file created successfully");
                         return;
                     } else {
                         exit(1);
@@ -113,14 +124,16 @@ fn check_config() {
                     "api_url" => {
                         has_url = true;
                         if val != "https://hackatime.hackclub.com/api/hackatime/v1" {
-                            warn(format!("Incorrect api url found {val}, replacing..."));
-                            *line = "api_url = https://hackatime.hackclub.com/api/hackatime/v1".to_string();
-                            dirty = true
+                            warn(format!("Incorrect api url found {val}"));
+                            if !ask("Replace with https://hackatime.hackclub.com/api/hackatime/v1? (Y/n) ").contains("n") {
+                                *line = "api_url = https://hackatime.hackclub.com/api/hackatime/v1".to_string();
+                                dirty = true
+                            }
                         }
                     }
                     "api_key" => {
                         has_key = true;
-                        let mut api_key = val.to_string();
+                        api_key = val.to_string();
                         validate_key(&mut api_key);
                         if api_key != val {
                             *line = format!("api_key = {api_key}");
@@ -138,12 +151,7 @@ fn check_config() {
         }
         if !has_key {
             warn("No api key found, adding...");
-            let mut api_key = variable("HACKATIME_API_KEY").unwrap_or(String::new());
-            if api_key.is_empty() {
-                api_key = ask_key();
-            } else {
-                validate_key(&mut api_key);
-            }
+            api_key = ask_key();
             lines.push(format!("api_key = {api_key}"));
             dirty = true
         }
@@ -155,28 +163,29 @@ fn check_config() {
         }
     } else {
         warn("No wakatime config file found, creating...");
-        create_config(&wakatime_config);
-    }
-}
+        api_key = ask_key();
 
-fn create_config(wakatime_config: &PathBuf) {
-    let mut api_key = variable("HACKATIME_API_KEY").unwrap_or(String::new());
-    if api_key.is_empty() {
-        api_key = ask_key()
-    } else {
-        validate_key(&mut api_key);
-    }
-
-    fs::write(wakatime_config, ("[settings]
+        fs::write(wakatime_config, ("[settings]
 api_url = https://hackatime.hackclub.com/api/hackatime/v1
 api_key = ".to_owned() +api_key.as_str()+"
 heartbeat_rate_limit_seconds = 30").as_bytes()).expect("Could not write wakatime config file");
 
-    ok("Wakatime config file created successfully");
+        ok("Wakatime config file created successfully");
+    }
+
+    if let Ok(res) = get("https://hackatime.hackclub.com/api/hackatime/v1/users/me/statusbar/today?api_key=".to_string() + &*api_key).and_then(|r| r.text()) {
+        let time = &res.split("\"total_seconds\":").collect::<Vec<&str>>()[1];
+        let time: u16 = time[..time.len() - 3].parse().expect("Invalid number returned from API");
+        let minutes = time / 60;
+        info(format!("You have coded for {}h {}m today according to Hackatime", minutes / 60, minutes % 60));
+    } else {
+        err("Could not fetch current hours")
+    }
 }
 
 fn ask_key() -> String {
-    let mut api_key = ask("What is your API key? ");//TODO link
+    let mut api_key = var_os("HACKATIME_API_KEY").map(|key|key.to_string_lossy().to_string())
+        .unwrap_or_else(|| ask("What is your API key? "));
     validate_key(&mut api_key);
     api_key
 }
@@ -192,7 +201,8 @@ fn validate_key(api_key: &mut String) {
         .send().expect("Failed to send heartbeat").status();
     if code == 401 {
         err(format!("Invalid API key {api_key}"));
-        *api_key = ask_key();
+        *api_key = ask("What is your API key? ");//TODO link
+        validate_key(api_key);
     } else if !code.is_success() {
         panic!("{} Failed to send heartbeat!", code.as_str());
     } else {
@@ -202,19 +212,19 @@ fn validate_key(api_key: &mut String) {
 
 fn check_vscode() {
     if let Some(output) = run("code --list-extensions") {
-        if String::from_utf8(output).expect("Stdout returned non-UTF data").contains("wakatime.vscode-wakatime") {
+        if output.contains("wakatime.vscode-wakatime") {
             ok("Wakatime is installed in VS Code");
             let path;
 
             if cfg!(target_os = "windows") {
-                path = variable("APPDATA")
+                path = path_from_env("APPDATA")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(variable("USERPROFILE").expect("No home or APPDATA directory found")).join("AppData/Roaming"))
+                    .unwrap_or_else(|| PathBuf::from(path_from_env("USERPROFILE").expect("No home or APPDATA directory found")).join("AppData/Roaming"))
                     .join("Code/User/settings.json");
             } else if cfg!(target_os = "macos") {
-                path = PathBuf::from(variable("HOME").expect("No home directory found")).join("Library/Application Support/Code/User/settings.json");
+                path = PathBuf::from(path_from_env("HOME").expect("No home directory found")).join("Library/Application Support/Code/User/settings.json");
             } else {
-                path = variable("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(variable("HOME").expect("No home directory found"))
+                path = path_from_env("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(path_from_env("HOME").expect("No home directory found"))
                     .join(".config")).join("Code/User/settings.json");
             }
             if let Ok(content) = fs::read_to_string(path) {
@@ -244,20 +254,20 @@ fn check_vscode() {
 fn check_jetbrains() {
     let mut path;
     if cfg!(target_os = "windows") {
-        path = PathBuf::from(variable("LOCALAPPDATA").expect("No local appdata found"));
+        path = PathBuf::from(path_from_env("LOCALAPPDATA").expect("No local appdata found"));
     } else if cfg!(target_os = "macos") {
-        path = PathBuf::from(variable("HOME").expect("No home directory found")).join("Library/Application Support");
+        path = PathBuf::from(path_from_env("HOME").expect("No home directory found")).join("Library/Application Support");
         if !Path::new(&path).exists() {path = PathBuf::from("/usr/local/bin");}
     } else {
-        path = PathBuf::from(variable("HOME").expect("No home directory found")).join(".local/share");
+        path = PathBuf::from(path_from_env("HOME").expect("No home directory found")).join(".local/share");
     }
     path = path.join("JetBrains/Toolbox/scripts");
     if let Ok(dir) = fs::read_dir(path) { 
         for entry in dir {
             if let Ok(entry) = entry {
-                let file = entry.file_name().to_str().unwrap().to_string();
+                let file = entry.file_name().to_str().expect("Invalid unicode").to_string();
                 if let Some(name) = if cfg!(windows){file.strip_suffix(".cmd")}else{if file.ends_with(".cmd"){None}else{Some(&*file)}} {
-                    if !ask(format!("Do you want to install Wakatime for {}? (Y/n) ", name)).contains("n") {
+                    if !ask(format!("Do you want to install Wakatime for {}? (Make sure it is not open!) (Y/n) ", name)).contains("n") {
                         if run_with_output(&*(entry.path().to_string_lossy().to_string() + " installPlugins com.wakatime.intellij.plugin")) {
                             ok("Successfully installed Wakatime for ".to_owned() + name);
                         } else {
@@ -274,9 +284,73 @@ fn check_jetbrains() {
 
 #[cfg(unix)]
 fn check_terminal() {
-    if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
-        run_with_output("curl -fsSL https://hack.club/terminal-wakatime.sh | sh");
+    if run("terminal-wakatime").is_some() {
+        ok("Wakatime is installed in the terminal");
+        check_terminal_registered(false);
+    } else {
+        if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
+            if let Ok(Some(res)) = get("https://api.github.com/repos/hackclub/terminal-wakatime/releases/latest")
+                .and_then(|r|r.text())
+                .map(|r| r.lines().find(|l| l.trim().starts_with("\"tag_name\":"))){
+                let os = if cfg!(target_os = "windows") {"windows"} else if cfg!(target_os = "macos") {"darwin"} else {"linux"};
+                let arch = if cfg!(any(target_arch = "arm", target_arch = "aarch64")) {"arm64"} else {"amd64"};
+                let url = format!("https://github.com/hackclub/terminal-wakatime/releases/download/{}/terminal-wakatime-{os}-{arch}", &res.trim()[12..18]);
+                let mut target = PathBuf::from("/usr/local/bin/terminal-wakatime");
+                if target.metadata().map(|m| m.permissions().readonly()).unwrap_or(true) {
+                    target = path_from_env("HOME").expect("No home directory found").join(".wakatime/terminal-wakatime");
+                    fs::create_dir_all(&target).expect("Failed to create ~/.wakatime");
+                }
+
+                if let Ok(data) = get(url).and_then(|r| r.bytes()) {
+                    if File::create(&target).write_all(data) {
+                        ok("Successfully downloaded Wakatime for the terminal to " + target);
+                        check_terminal_registered(&target);
+                    } else {
+                        err("Failed write to " + target);
+                    }
+                } else { 
+                    err("Failed to get the latest binary")
+                }
+            } else {
+                err("Failed to fetch latest tag");
+                return;
+            }
+        }
     }
+}
+
+fn check_terminal_registered(add_path: bool) {
+    for (name, file) in [("bash", ".bashrc"), ("zsh", ".zshrc"), ("fish", ".config/fish/config.fish")] {
+        let path = path_from_env("HOME").expect("No home directory found").join(file);
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(mut content) = fs::read_to_string(&path) {
+            if content.contains("terminal-wakatime") {
+                ok(file.to_string() + " has time tracking setup");
+                continue;
+            }
+            if ask(format!("Do you want to setup time tracking for {name}? (Y/n) ")).contains("n") {
+                continue;
+            }
+            content += "\n";
+            if name == "fish" {
+                if add_path {
+                    content += "set -x PATH \"$HOME/.wakatime\" $PATH";
+                }
+                content += "terminal-wakatime init fish | source";
+            } else {
+                if let Some(output) = run("terminal-wakatime init") {
+                    if add_path {
+                        content += "export PATH=\"$HOME/.wakatime:$PATH\"";
+                    }
+                    content += &*format!("eval {output}");
+                }
+            }
+            ok("Registered wakatime-terminal for ".to_string() + name);
+        }
+    }
+    info("Restart your terminal for time tracking to work")
 }
 
 fn err<S: Display>(text: S) {
@@ -297,32 +371,32 @@ fn ok<S: Display>(text: S) {
 
 fn ask<S: Display>(text: S) -> String {
     print!("❓  {text}");
-    stdout().flush().unwrap();
+    let _ = stdout().flush();
     let mut response = String::new();
     stdin().read_line(&mut response).expect("Failed to read from stdin");
     response.trim().to_lowercase()
 }
 
-fn variable(key: &str) -> Option<String> {
-    let val = var_os(key)?.to_str()?.trim().to_string();
-    if val.is_empty() || !Path::new(&val).exists() {
+fn path_from_env(key: &str) -> Option<PathBuf> {
+    let val = PathBuf::from(var_os(key)?.to_str()?.trim().to_string());
+    if !Path::new(&val).exists() {
         return None;
     }
     Some(val)
 }
 
-fn run(args: &str) -> Option<Vec<u8>> {
+fn run<S: AsRef<OsStr>>(args: S) -> Option<String> {
     let mut command;
-    if cfg!(target_os = "windows") {
+    if cfg!(windows) {
         command = Command::new("cmd");
         command.arg("/C");
     } else {
-        command = Command::new(variable("SHELL").unwrap_or("/bin/sh".to_string()));
+        command = Command::new(path_from_env("SHELL").map(|v| v.into_os_string()).unwrap_or(OsString::from("/bin/sh")));
         command.args(&["-l", "-c"]);
     }
     if let Ok(result) = command.arg(args).output() {
         if result.status.success() {
-            return Some(result.stdout);
+            return Some(String::from_utf8(result.stdout).expect("Stdout returned non-UTF data"));
         }
     }
     None
@@ -330,11 +404,11 @@ fn run(args: &str) -> Option<Vec<u8>> {
 
 fn run_with_output(args: &str) -> bool {
     let mut command;
-    if cfg!(target_os = "windows") {
+    if cfg!(windows) {
         command = Command::new("cmd");
         command.arg("/C");
     } else {
-        command = Command::new(variable("SHELL").unwrap_or("/bin/sh".to_string()));
+        command = Command::new(path_from_env("SHELL").map(|v| v.into_os_string()).unwrap_or(OsString::from("/bin/sh")));
         command.args(&["-l", "-c"]);
     }
     command.arg(args).stdout(Stdio::inherit()).stderr(Stdio::inherit()).stdin(Stdio::inherit()).status().is_ok_and(|o| o.success())
