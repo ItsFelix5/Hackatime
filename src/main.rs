@@ -296,17 +296,19 @@ fn check_terminal() {
                 let arch = if cfg!(any(target_arch = "arm", target_arch = "aarch64")) {"arm64"} else {"amd64"};
                 let url = format!("https://github.com/hackclub/terminal-wakatime/releases/download/{}/terminal-wakatime-{os}-{arch}", &res.trim()[12..18]);
                 let mut target = PathBuf::from("/usr/local/bin/terminal-wakatime");
+                let mut add_path = false;
                 if target.metadata().map(|m| m.permissions().readonly()).unwrap_or(true) {
                     target = path_from_env("HOME").expect("No home directory found").join(".wakatime/terminal-wakatime");
                     fs::create_dir_all(&target).expect("Failed to create ~/.wakatime");
+                    add_path = true;
                 }
 
                 if let Ok(data) = get(url).and_then(|r| r.bytes()) {
-                    if File::create(&target).write_all(data) {
-                        ok("Successfully downloaded Wakatime for the terminal to " + target);
-                        check_terminal_registered(&target);
+                    if File::create(&target).and_then(|mut f| f.write_all(&*data)).is_ok() {
+                        ok("Successfully downloaded Wakatime for the terminal to ".to_string() + &*target.to_string_lossy());
+                        check_terminal_registered(add_path);
                     } else {
-                        err("Failed write to " + target);
+                        err("Failed write to ".to_string() + &*target.to_string_lossy());
                     }
                 } else { 
                     err("Failed to get the latest binary")
@@ -319,6 +321,7 @@ fn check_terminal() {
     }
 }
 
+#[cfg(unix)]
 fn check_terminal_registered(add_path: bool) {
     for (name, file) in [("bash", ".bashrc"), ("zsh", ".zshrc"), ("fish", ".config/fish/config.fish")] {
         let path = path_from_env("HOME").expect("No home directory found").join(file);
