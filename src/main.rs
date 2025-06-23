@@ -289,12 +289,10 @@ fn check_terminal() {
         check_terminal_registered(false);
     } else {
         if !ask("Do you want to install Wakatime in the terminal? (Y/n) ").contains("n") {
-            if let Ok(Some(res)) = get("https://api.github.com/repos/hackclub/terminal-wakatime/releases/latest")
-                .and_then(|r|r.text())
-                .map(|r| r.lines().find(|l| l.trim().starts_with("\"tag_name\":"))){
-                let os = if cfg!(target_os = "windows") {"windows"} else if cfg!(target_os = "macos") {"darwin"} else {"linux"};
-                let arch = if cfg!(any(target_arch = "arm", target_arch = "aarch64")) {"arm64"} else {"amd64"};
-                let url = format!("https://github.com/hackclub/terminal-wakatime/releases/download/{}/terminal-wakatime-{os}-{arch}", &res.trim()[12..18]);
+
+            let os = if cfg!(target_os = "windows") {"windows"} else if cfg!(target_os = "macos") {"darwin"} else {"linux"};
+            let arch = if cfg!(any(target_arch = "arm", target_arch = "aarch64")) {"arm64"} else {"amd64"};
+            if let Ok(data) = get(format!("github.com/hackclub/terminal-wakatime/releases/latest/download/terminal-wakatime-{os}-{arch}")).and_then(|r| r.bytes()) {
                 let mut target = PathBuf::from("/usr/local/bin/terminal-wakatime");
                 let mut add_path = false;
                 if target.metadata().map(|m| m.permissions().readonly()).unwrap_or(true) {
@@ -302,20 +300,14 @@ fn check_terminal() {
                     fs::create_dir_all(&target).expect("Failed to create ~/.wakatime");
                     add_path = true;
                 }
-
-                if let Ok(data) = get(url).and_then(|r| r.bytes()) {
-                    if File::create(&target).and_then(|mut f| f.write_all(&*data)).is_ok() {
-                        ok("Successfully downloaded Wakatime for the terminal to ".to_string() + &*target.to_string_lossy());
-                        check_terminal_registered(add_path);
-                    } else {
-                        err("Failed write to ".to_string() + &*target.to_string_lossy());
-                    }
-                } else { 
-                    err("Failed to get the latest binary")
+                if File::create(&target).and_then(|mut f| f.write_all(&*data)).is_ok() {
+                    ok("Successfully downloaded Wakatime for the terminal to ".to_string() + &*target.to_string_lossy());
+                    check_terminal_registered(add_path);
+                } else {
+                    err("Failed write to ".to_string() + &*target.to_string_lossy());
                 }
-            } else {
-                err("Failed to fetch latest tag");
-                return;
+            } else { 
+                err("Failed to get the latest binary")
             }
         }
     }
